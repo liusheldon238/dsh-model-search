@@ -37,3 +37,30 @@ test("strictly no-ops on group or row count/order mismatches", () => {
   assert.equal(mapGroupedModelRows(wrongRows, groups), null);
   assert.equal(mapGroupedModelRows(menu(), groups.slice(0, 1)), null);
 });
+
+test("semantically maps provider labels and row titles when structural counts drift", () => {
+  const root = new JSDOM(`<div role="menu">
+    <div class="scrollable">
+      <section role="group" aria-labelledby="provider-two"><div id="provider-two">Other</div><button role="menuitemradio" title="Other model">Other model</button></section>
+      <section role="group" aria-labelledby="provider-one"><div id="provider-one">Provider</div><button role="menuitemradio" title="Same">Same</button></section>
+    </div>
+  </div>`).window.document.querySelector("[role=menu]");
+  const result = mapGroupedModelRows(root, groups, { semanticFallback: true });
+  assert.ok(result);
+  assert.equal(result.mode, "semantic");
+  assert.deepEqual(result.entries.map((entry) => [entry.group.id, entry.models.map((model) => model.id)]), [
+    ["p2", ["other"]],
+    ["p1", ["same-a", "same-b"]]
+  ]);
+});
+
+test("semantic fallback leaves only unmappable rows marked open", () => {
+  const root = new JSDOM(`<div role="menu"><section role="group"><div>Provider</div>
+    <button role="menuitemradio" title="Same">Same</button>
+    <button role="menuitemradio" title="Unknown model">Unknown model</button>
+  </section></div>`).window.document.querySelector("[role=menu]");
+  const result = mapGroupedModelRows(root, groups.slice(0, 1), { semanticFallback: true });
+  assert.ok(result);
+  assert.deepEqual(result.entries[0].models.map((model) => model.id), ["same-a", "same-b"]);
+  assert.deepEqual(result.entries[1].models, []);
+});

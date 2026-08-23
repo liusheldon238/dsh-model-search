@@ -51,6 +51,14 @@ test("injects once, focuses search, filters raw IDs, and hides empty groups", ()
   input(control.input, "missing");
   assert.equal(menu.querySelector('[data-dsh-model-search="empty"]').hidden, false);
   assert.equal(menu.querySelector('[data-dsh-model-search="empty"]').textContent, "No matching models");
+  let parentNavigation = 0;
+  menu.addEventListener("keydown", (event) => {
+    if (["ArrowDown", "ArrowUp", "Enter"].includes(event.key)) parentNavigation += 1;
+  });
+  for (const key of ["ArrowDown", "ArrowUp", "Enter"]) {
+    control.input.dispatchEvent(new menu.ownerDocument.defaultView.KeyboardEvent("keydown", { key, bubbles: true }));
+  }
+  assert.equal(parentNavigation, 0);
 });
 
 test("restores all official rows on clear and cleanup", () => {
@@ -68,13 +76,20 @@ test("keyboard navigation clicks original rows and Escape clears before bubbling
   const { menu, dom } = fixture();
   const rows = [...menu.querySelectorAll('button[role="menuitemradio"]')];
   let clicked = 0;
+  let parentNavigation = 0;
   rows[2].addEventListener("click", () => { clicked += 1; });
+  menu.addEventListener("keydown", (event) => {
+    if (["ArrowDown", "ArrowUp", "Enter"].includes(event.key)) parentNavigation += 1;
+  });
   const control = decorateComposerMenu(menu, groups);
   input(control.input, "claude");
 
   control.input.dispatchEvent(new dom.window.KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }));
-  control.input.dispatchEvent(new dom.window.KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+  assert.equal(menu.ownerDocument.activeElement, control.input);
+  assert.equal(control.input.getAttribute("aria-activedescendant"), rows[2].id);
+  menu.ownerDocument.activeElement.dispatchEvent(new dom.window.KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
   assert.equal(clicked, 1);
+  assert.equal(parentNavigation, 0);
 
   let escaped = 0;
   menu.addEventListener("keydown", (event) => { if (event.key === "Escape") escaped += 1; });
@@ -87,9 +102,45 @@ test("keyboard navigation clicks original rows and Escape clears before bubbling
 
 test("warns once and safely no-ops when official DOM structure is incompatible", () => {
   const { menu } = fixture();
-  menu.querySelector("button").remove();
+  menu.replaceChildren(menu.ownerDocument.createElement("div"));
   const warnings = [];
   assert.equal(decorateComposerMenu(menu, groups, { onWarning: (message) => warnings.push(message) }), null);
   assert.equal(decorateComposerMenu(menu, groups, { onWarning: (message) => warnings.push(message) }), null);
   assert.equal(warnings.length, 1);
+});
+
+test("inserts the search UI into the nested scroll container used by DSH", () => {
+  const { dom } = fixture();
+  const menu = dom.window.document.querySelector("[role=menu]");
+  const scrollable = dom.window.document.createElement("div");
+  scrollable.className = "scrollable";
+  for (const section of [...menu.querySelectorAll('section[role="group"]')]) scrollable.append(section);
+  menu.append(scrollable);
+  const control = decorateComposerMenu(menu, groups);
+  assert.ok(control);
+  assert.equal(control.input.parentElement.parentElement, scrollable);
+  assert.equal(scrollable.firstElementChild.dataset.dshModelSearch, "composer");
+});
+
+test("matches every raw ID aggregated behind a duplicate visible model and fails open for unknown rows", () => {
+  const { dom } = fixture();
+  const menu = dom.window.document.querySelector("[role=menu]");
+  const providerSection = menu.querySelector('section[role="group"]');
+  providerSection.querySelectorAll("button")[1].remove();
+  const unknown = dom.window.document.createElement("button");
+  unknown.setAttribute("role", "menuitemradio");
+  unknown.title = "Unknown model";
+  unknown.textContent = "Unknown model";
+  providerSection.append(unknown);
+  const duplicateDirectory = [
+    { id: "deepseek", name: "DeepSeek", models: [{ id: "raw-id-a", name: "DeepSeek V3" }, { id: "raw-id-b", name: "DeepSeek V3" }] },
+    groups[1]
+  ];
+  const control = decorateComposerMenu(menu, duplicateDirectory);
+  assert.ok(control);
+  input(control.input, "raw-id-b");
+  const rows = [...menu.querySelectorAll('button[role="menuitemradio"]')];
+  assert.equal(rows[0].hidden, false);
+  assert.equal(unknown.hidden, false);
+  assert.equal(rows.at(-1).hidden, true);
 });

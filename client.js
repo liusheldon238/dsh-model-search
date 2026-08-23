@@ -86,31 +86,73 @@ var DSHModelSearch = (() => {
   }
 
   // lib/dom.js
-  function mapGroupedModelRows(root, groups) {
+  function normalized(value) {
+    return String(value ?? "").trim().toLocaleLowerCase();
+  }
+  function sectionLabel(section) {
+    const labelledBy = section.getAttribute("aria-labelledby");
+    const labelled = labelledBy && section.ownerDocument.getElementById(labelledBy);
+    const heading = section.querySelector("h1,h2,h3,h4,h5,h6");
+    return (labelled?.textContent ?? heading?.textContent ?? section.firstElementChild?.textContent ?? "").trim();
+  }
+  function rowLabel(row) {
+    return (row.getAttribute("title") ?? row.getAttribute("aria-label") ?? row.textContent ?? "").trim();
+  }
+  function groupMatchesLabel(group, label) {
+    const value = normalized(label);
+    return value !== "" && [group?.id, group?.name].some((candidate) => normalized(candidate) === value);
+  }
+  function semanticMapping(sections, groups) {
+    const entries = [];
+    for (const mapped of sections) {
+      const label = sectionLabel(mapped.section);
+      const matches = groups.filter((group2) => groupMatchesLabel(group2, label));
+      const group = matches.length === 1 ? matches[0] : { id: label, name: label, models: [] };
+      for (const row of mapped.rows) {
+        const visible = normalized(rowLabel(row));
+        const models = matches.length === 1 ? (group.models ?? []).filter((model) => [model?.name, model?.id].some((value) => normalized(value) === visible)) : [];
+        entries.push({ group, model: models[0], models, row, section: mapped.section });
+      }
+    }
+    return { entries, sections: sections.map(({ section }) => section), mode: "semantic" };
+  }
+  function mapGroupedModelRows(root, groups, { semanticFallback = false } = {}) {
     if (!root || !Array.isArray(groups)) return null;
     const sections = [...root.querySelectorAll('section[role="group"]')].map((section) => ({ section, rows: [...section.querySelectorAll('button[role="menuitemradio"]')] })).filter(({ rows }) => rows.length > 0);
-    if (sections.length !== groups.length) return null;
+    if (sections.length === 0) return null;
+    const structurallyCompatible = sections.length === groups.length && sections.every((mapped, index) => {
+      const label = sectionLabel(mapped.section);
+      const models = groups[index]?.models ?? [];
+      return (!label || groupMatchesLabel(groups[index], label)) && mapped.rows.length === models.length && mapped.rows.every((row, modelIndex) => {
+        const visible = normalized(rowLabel(row));
+        const model = models[modelIndex];
+        return [model?.name, model?.id].some((value) => normalized(value) === visible);
+      });
+    });
+    if (!structurallyCompatible) return semanticFallback ? semanticMapping(sections, groups) : null;
     const entries = [];
     for (let groupIndex = 0; groupIndex < groups.length; groupIndex += 1) {
       const group = groups[groupIndex];
       const mapped = sections[groupIndex];
       const models = Array.isArray(group?.models) ? group.models : [];
-      if (mapped.rows.length !== models.length) return null;
+      if (mapped.rows.length !== models.length) return semanticFallback ? semanticMapping(sections, groups) : null;
       for (let modelIndex = 0; modelIndex < models.length; modelIndex += 1) {
         entries.push({
           group,
           model: models[modelIndex],
+          models: [models[modelIndex]],
           row: mapped.rows[modelIndex],
           section: mapped.section
         });
       }
     }
-    return { entries, sections: sections.map(({ section }) => section) };
+    return { entries, sections: sections.map(({ section }) => section), mode: "structural" };
   }
 
   // lib/composer.js
   var controllers = /* @__PURE__ */ new WeakMap();
   var warned = /* @__PURE__ */ new WeakSet();
+  var controlSequence = 0;
   function isComposerModelMenu(root) {
     if (root?.getAttribute?.("role") !== "menu") return false;
     const label = root.getAttribute("aria-label") ?? "";
@@ -124,7 +166,7 @@ var DSHModelSearch = (() => {
   function decorateComposerMenu(root, groups, { locale = "en", onWarning = console.warn } = {}) {
     if (controllers.has(root)) return controllers.get(root);
     if (!isComposerModelMenu(root)) return null;
-    const mapping = mapGroupedModelRows(root, groups);
+    const mapping = mapGroupedModelRows(root, groups, { semanticFallback: true });
     if (!mapping) {
       warnIncompatible(root, onWarning);
       return null;
@@ -145,15 +187,26 @@ var DSHModelSearch = (() => {
     empty.textContent = locale.startsWith("zh") ? "\u6CA1\u6709\u5339\u914D\u7684\u6A21\u578B" : "No matching models";
     empty.style.cssText = "padding:12px;opacity:.7;text-align:center";
     empty.hidden = true;
-    root.insertBefore(wrapper, mapping.sections[0]);
-    root.append(empty);
+    const container = mapping.sections[0].parentElement;
+    container.insertBefore(wrapper, mapping.sections[0]);
+    container.append(empty);
     let visible = mapping.entries;
     let activeIndex = -1;
+    const controlId = ++controlSequence;
+    const assignedIds = /* @__PURE__ */ new Set();
+    const activate = (entry, index) => {
+      if (!entry.row.id) {
+        entry.row.id = `dsh-model-search-composer-${controlId}-${index}`;
+        assignedIds.add(entry.row);
+      }
+      input.setAttribute("aria-activedescendant", entry.row.id);
+      entry.row.scrollIntoView?.({ block: "nearest" });
+    };
     const applyFilter = () => {
       visible = [];
       const query = input.value;
       for (const entry of mapping.entries) {
-        const match = modelMatches(entry.group, entry.model, query);
+        const match = entry.models.length === 0 ? true : entry.models.some((model) => modelMatches(entry.group, model, query));
         entry.row.hidden = !match;
         if (match) visible.push(entry);
       }
@@ -161,6 +214,7 @@ var DSHModelSearch = (() => {
         section.hidden = !mapping.entries.some((entry) => entry.section === section && !entry.row.hidden);
       }
       activeIndex = -1;
+      input.removeAttribute("aria-activedescendant");
       empty.hidden = visible.length !== 0;
     };
     const onInput = () => applyFilter();
@@ -172,14 +226,16 @@ var DSHModelSearch = (() => {
         applyFilter();
         return;
       }
+      const handled = event.key === "ArrowDown" || event.key === "ArrowUp" || event.key === "Enter";
+      if (!handled) return;
+      event.preventDefault();
+      event.stopPropagation();
       if (!visible.length) return;
       if (event.key === "ArrowDown" || event.key === "ArrowUp") {
-        event.preventDefault();
         const direction = event.key === "ArrowDown" ? 1 : -1;
         activeIndex = activeIndex < 0 ? direction > 0 ? 0 : visible.length - 1 : (activeIndex + direction + visible.length) % visible.length;
-        visible[activeIndex].row.focus();
+        activate(visible[activeIndex], activeIndex);
       } else if (event.key === "Enter" && activeIndex >= 0) {
-        event.preventDefault();
         visible[activeIndex].row.click();
       }
     };
@@ -191,6 +247,7 @@ var DSHModelSearch = (() => {
         input.removeEventListener("input", onInput);
         input.removeEventListener("keydown", onKeyDown);
         for (const entry of mapping.entries) entry.row.hidden = false;
+        for (const row of assignedIds) row.removeAttribute("id");
         for (const section of mapping.sections) section.hidden = false;
         wrapper.remove();
         empty.remove();
@@ -205,6 +262,7 @@ var DSHModelSearch = (() => {
   // lib/model-command.js
   var controllers2 = /* @__PURE__ */ new WeakMap();
   var warned2 = /* @__PURE__ */ new WeakSet();
+  var controlSequence2 = 0;
   function nativeSearch(card) {
     return [...card?.querySelectorAll?.("input") ?? []].find((input) => /filter options|筛选选项/i.test(input.getAttribute("aria-label") ?? ""));
   }
@@ -254,8 +312,25 @@ var DSHModelSearch = (() => {
     native.value = "";
     native.dispatchEvent(new document.defaultView.Event("input", { bubbles: true }));
     native.hidden = true;
+    const empty = document.createElement("div");
+    empty.dataset.dshModelSearch = "model-command-empty";
+    empty.textContent = locale.startsWith("zh") ? "\u6CA1\u6709\u5339\u914D\u7684\u6A21\u578B" : "No matching models";
+    empty.style.cssText = "padding:12px;opacity:.7;text-align:center";
+    empty.hidden = true;
+    const listbox = card.querySelector('[role="listbox"]');
+    listbox.parentNode.insertBefore(empty, listbox.nextSibling);
     let visible = entries;
     let activeIndex = -1;
+    const controlId = ++controlSequence2;
+    const assignedIds = /* @__PURE__ */ new Set();
+    const activate = (entry, index) => {
+      if (!entry.row.id) {
+        entry.row.id = `dsh-model-search-command-${controlId}-${index}`;
+        assignedIds.add(entry.row);
+      }
+      input.setAttribute("aria-activedescendant", entry.row.id);
+      entry.row.scrollIntoView?.({ block: "nearest" });
+    };
     const applyFilter = () => {
       visible = [];
       for (const entry of entries) {
@@ -264,6 +339,8 @@ var DSHModelSearch = (() => {
         if (match) visible.push(entry);
       }
       activeIndex = -1;
+      input.removeAttribute("aria-activedescendant");
+      empty.hidden = visible.length !== 0;
     };
     const onInput = () => applyFilter();
     const onKeyDown = (event) => {
@@ -274,14 +351,16 @@ var DSHModelSearch = (() => {
         applyFilter();
         return;
       }
+      const handled = event.key === "ArrowDown" || event.key === "ArrowUp" || event.key === "Enter";
+      if (!handled) return;
+      event.preventDefault();
+      event.stopPropagation();
       if (!visible.length) return;
       if (event.key === "ArrowDown" || event.key === "ArrowUp") {
-        event.preventDefault();
         const direction = event.key === "ArrowDown" ? 1 : -1;
         activeIndex = activeIndex < 0 ? direction > 0 ? 0 : visible.length - 1 : (activeIndex + direction + visible.length) % visible.length;
-        visible[activeIndex].row.focus();
+        activate(visible[activeIndex], activeIndex);
       } else if (event.key === "Enter" && activeIndex >= 0) {
-        event.preventDefault();
         visible[activeIndex].row.click();
       }
     };
@@ -293,7 +372,9 @@ var DSHModelSearch = (() => {
         input.removeEventListener("input", onInput);
         input.removeEventListener("keydown", onKeyDown);
         for (const entry of entries) entry.row.hidden = false;
+        for (const row of assignedIds) row.removeAttribute("id");
         native.hidden = false;
+        empty.remove();
         input.remove();
         controllers2.delete(card);
       }
