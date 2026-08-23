@@ -19,7 +19,21 @@
     "README.md"
   ],
   "scripts": {
+    "build": "node scripts/build-client.mjs",
+    "prepack": "npm run build && npm test",
     "test": "node --test"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "inject": [
+        "@deepseek-ai/dsh-client-runtime",
+        "@deepseek-ai/dsh-client-ui-model-selection"
+      ],
+      "platform": "web"
+    }
   },
   "license": "MIT",
   "repository": {
@@ -31,6 +45,7 @@
   },
   "homepage": "https://github.com/liusheldon238/dsh-model-search#readme",
   "devDependencies": {
+    "esbuild": "^0.25.9",
     "jsdom": "^26.1.0"
   }
 }
