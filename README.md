@@ -13,7 +13,7 @@
 ## 安装
 
 ```bash
-dsh plugin --profile web add https://github.com/liusheldon238/dsh-model-search/releases/download/v0.1.1/dsh-model-search-0.1.1.tgz
+dsh plugin --profile web add https://github.com/liusheldon238/dsh-model-search/releases/download/v0.1.2/dsh-model-search-0.1.2.tgz
 ```
 
 重启 `dsh web` 后生效。

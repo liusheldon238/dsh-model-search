@@ -26,16 +26,30 @@ async function settle() {
 test("observes new composer menus and decorates them from the current public directory", async () => {
   const dom = new JSDOM("<main></main>", { pretendToBeVisual: true });
   const sessions = store({ current: "session-1" });
-  const directory = store(snapshot);
+  const directory = store({
+    groups: [{
+      id: "provider",
+      name: "Provider",
+      models: [
+        { id: "raw/model-id", name: "Visible model" },
+        { id: "raw/other-id", name: "Other model" }
+      ]
+    }],
+    failures: []
+  });
   const runtime = startModelSearch({
     document: dom.window.document,
     MutationObserver: dom.window.MutationObserver,
     sessions: { list: sessions },
     modelDirectories: { directoryFor: () => ({ store: directory }) }
   });
-  dom.window.document.querySelector("main").innerHTML = '<div role="menu" aria-label="Model and reasoning effort"><section role="group"><button role="menuitemradio">Visible model</button></section></div>';
+  dom.window.document.querySelector("main").innerHTML = '<div role="menu" aria-label="Model and reasoning effort"><section role="group"><button role="menuitemradio">Visible model</button><button role="menuitemradio">Other model</button></section></div>';
   await settle();
-  assert.ok(dom.window.document.querySelector('[data-dsh-model-search="composer"]'));
+  const input = dom.window.document.querySelector('[data-dsh-model-search="composer"] input');
+  assert.ok(input);
+  input.value = "raw/model-id";
+  input.dispatchEvent(new dom.window.Event("input", { bubbles: true }));
+  assert.deepEqual([...dom.window.document.querySelectorAll('button[role="menuitemradio"]')].map((row) => row.hidden), [false, true]);
   runtime.stop();
   assert.equal(dom.window.document.querySelector('[data-dsh-model-search="composer"]'), null);
   assert.equal(sessions.listenerCount(), 0);

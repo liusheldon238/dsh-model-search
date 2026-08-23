@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.2 - 2026-08-23
+
+- Preserve exact structural mapping for provider groups that have no heading instead of treating their first selectable model as the provider label.
+- Add runtime coverage proving raw-ID filtering in a heading-free model group.
+
 ## 0.1.1 - 2026-08-23
 
 - Insert composer search inside DSH's nested scroll container.
