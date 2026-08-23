@@ -15,6 +15,7 @@
     "cordis.patch.yml",
     "index.js",
     "lib",
+    "CHANGELOG.md",
     "LICENSE",
     "README.md"
   ],
