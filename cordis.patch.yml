@@ -1,0 +1,4 @@
+# dsh bundle patch: activate the model-search client layer.
+- insert:
+    - id: dsh-model-search
+      name: 'dsh-model-search'
